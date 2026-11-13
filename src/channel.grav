@@ -1,0 +1,65 @@
+// channel.grav — a named logger: its handlers, its own level (a message
+// below it is skipped before a LogRecord is even built), and persistent
+// context from with().
+import "std"
+import "logger.grav"
+
+namespace logger {
+
+    class LogChannel {
+        public name: string
+        public handlers: Array<Handler>
+        // A message below this level costs nothing beyond one comparison: no
+        // LogRecord, no context merge, no handler call.
+        public level: Level
+        // Set by with(): merged under every call's own context (its own keys win).
+        private baseContext: HashMap<string, any>
+
+        constructor(name: string) {
+            self.name = name;
+            self.handlers = new Array<Handler>();
+            self.level = Level.Debug;
+            self.baseContext = null;
+        }
+
+        fn addHandler(h: Handler) -> LogChannel { self.handlers.push(h); return self; }
+        fn withLevel(l: Level) -> LogChannel { self.level = l; return self; }
+        // A copy of this channel (same handlers and level) that adds key=value
+        // to every line it logs from here on.
+        fn with(key: string, value: any) -> LogChannel {
+            let child = new LogChannel(self.name);
+            child.handlers = self.handlers;
+            child.level = self.level;
+            child.baseContext = new HashMap<string, any>();
+            if (self.baseContext != null) { for (k in self.baseContext.keys()) { child.baseContext.put(k, self.baseContext[k]); } }
+            child.baseContext.put(key, value);
+            return child;
+        }
+        // Whether a message at `l` would reach any handler.
+        fn enabled(l: Level) -> bool { return l != Level.Off && int(l) >= int(self.level); }
+
+        fn log(l: Level, message: string, context: HashMap<string, any> = null) {
+            if (!self.enabled(l)) { return; }
+            let record = new LogRecord(l, message, self.name, self.mergeContext(context));
+            for (h in self.handlers) { h.handle(record); }
+        }
+        private fn mergeContext(context: HashMap<string, any>) -> HashMap<string, any> {
+            if (self.baseContext == null) { return context; }
+            let out = new HashMap<string, any>();
+            for (k in self.baseContext.keys()) { out.put(k, self.baseContext[k]); }
+            if (context != null) { for (k in context.keys()) { out.put(k, context[k]); } }
+            return out;
+        }
+
+        fn debug(message: string, context: HashMap<string, any> = null) { self.log(Level.Debug, message, context); }
+        fn info(message: string, context: HashMap<string, any> = null) { self.log(Level.Info, message, context); }
+        fn notice(message: string, context: HashMap<string, any> = null) { self.log(Level.Notice, message, context); }
+        fn warning(message: string, context: HashMap<string, any> = null) { self.log(Level.Warning, message, context); }
+        fn error(message: string, context: HashMap<string, any> = null) { self.log(Level.Error, message, context); }
+        // Logs an exception at Error level: the message, then its describe().
+        fn error(message: string, e: Exception) { self.log(Level.Error, message + ": " + e.describe()); }
+        fn critical(message: string, context: HashMap<string, any> = null) { self.log(Level.Critical, message, context); }
+        fn alert(message: string, context: HashMap<string, any> = null) { self.log(Level.Alert, message, context); }
+        fn emergency(message: string, context: HashMap<string, any> = null) { self.log(Level.Emergency, message, context); }
+    }
+}
