@@ -15,20 +15,20 @@ python3 bench.py 20000 /tmp/out.log
 
 ## Results
 
-Best of 3. Milliseconds (lower is better); memory is peak RSS in MB.
+Best of 10 (Python: 3). Milliseconds (lower is better); memory is peak RSS in MB.
 
 | | grav-logger (`--release`) | plain PHP | Python `logging` |
 |---|---:|---:|---:|
-| 20,000 lines | 61 | **46** | 464 |
+| 20,000 lines | 39 | **37** | 429 |
 | peak memory (MB) | **3.9** | 39.5 | 13.0 |
 
 The PHP script does less work than grav-logger's benchmark: it interpolates
 one number straight into the line, where grav-logger's formats a structured
 context map (a real `HashMap`, looked up and quoted-if-needed per field) —
-closer to what a program actually logs. Even so the two land in the same
-few-microseconds-per-line range; both are dominated by the same `fwrite` +
-`fflush` per line. Python's `logging` module, going through its own
-formatter and handler chain in the interpreter, is about 8–10× slower for
+closer to what a program actually logs. Even so the two are within a couple of milliseconds of each other (grav-logger
+was at 54 ms before it stopped running `localtime`/`strftime` for every line);
+both are dominated by the same `fwrite` + `fflush` per line. Python's `logging` module, going through its own
+formatter and handler chain in the interpreter, is about 11× slower for
 the same work.
 
 Memory is the clear difference: grav-logger peaks at about a tenth of
