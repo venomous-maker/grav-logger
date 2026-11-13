@@ -17,6 +17,10 @@ namespace logger {
         public formatter: Formatter
         private current: StreamHandler
         private currentDate: string
+        // The current file's day, as [dayStart, dayEnd) unix seconds (local
+        // midnights): a record inside it needs no date formatted to know its file.
+        private dayStart: long = 0
+        private dayEnd: long = 0
         private lock: Mutex
 
         constructor(basePath: string, days: int = 14) {
@@ -32,14 +36,22 @@ namespace logger {
         fn enabled(l: Level) -> bool { return l != Level.Off && int(l) >= int(self.minLevel); }
         fn handle(record: LogRecord) {
             if (!self.enabled(record.level)) { return; }
-            let date = record.time.date();
+            let t = record.time.unix();
             self.lock.lock();
-            if (date != self.currentDate) {
-                if (self.current != null) { self.current.close(); }
-                self.current = new StreamHandler(self.pathFor(date));
-                self.current.minLevel = Level.Debug;           // this handler already filtered by level
-                self.currentDate = date;
-                if (self.days > 0) { self.prune(record.time); }
+            if (self.current == null || t < self.dayStart || t >= self.dayEnd) {
+                let date = record.time.date();
+                if (date != self.currentDate) {
+                    if (self.current != null) { self.current.close(); }
+                    self.current = new StreamHandler(self.pathFor(date));
+                    self.current.minLevel = Level.Debug;       // this handler already filtered by level
+                    self.currentDate = date;
+                    if (self.days > 0) { self.prune(record.time); }
+                }
+                let y = record.time.year();
+                let m = record.time.month();
+                let d = record.time.day();
+                self.dayStart = DateTime.of(y, m, d).unix();
+                self.dayEnd = DateTime.of(y, m, d + 1).unix();  // (day 32 rolls into the next month)
             }
             self.current.formatter = self.formatter;
             self.current.handle(record);

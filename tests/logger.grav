@@ -124,6 +124,15 @@ test "RotatingFileHandler: a dated file, and pruning old ones" {
     // A fresh file within the retention survives a later write's pruning.
     h.handle(new LogRecord(Level.Info, "again", "", null));
     assertEq(readFile(dir + "/app-" + today + ".log") != "", true);
+
+    // A record from the next day goes to the next day's file, and one from
+    // today after it goes back to today's.
+    let tomorrow = new LogRecord(Level.Info, "tomorrow", "", null);
+    tomorrow.time = DateTime.now().addDays(1);
+    h.handle(tomorrow);
+    assertEq(readFile(dir + "/app-" + tomorrow.time.date() + ".log") != "", true);
+    h.handle(new LogRecord(Level.Info, "today again", "", null));
+    assertEq(Str.contains(readFile(dir + "/app-" + today + ".log"), "today again"), true);
     Dir.removeAll(dir);
 }
 
