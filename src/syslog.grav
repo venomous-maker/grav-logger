@@ -1,0 +1,51 @@
+// syslog.grav — a handler that writes to the system log (syslog(3)).
+//
+//   Logging.channel().addHandler(new SyslogHandler("myapp"))
+import "std"
+import "logger.grav"
+
+namespace logger {
+
+    %{
+    #include <syslog.h>
+    static void grav_syslog_open(const char* ident) { openlog(ident, LOG_PID, LOG_USER); }
+    static void grav_syslog_write(int priority, const char* line) { syslog(priority, "%s", line); }
+    %}
+
+    class SyslogHandler implements Handler {
+        public minLevel: Level
+        public formatter: Formatter
+        private opened: bool
+
+        // `ident` tags each line (as the process name usually does); opened once,
+        // the first time this handler writes.
+        constructor(ident: string) {
+            self.minLevel = Level.Debug;
+            self.formatter = new LineFormatter();
+            self.opened = false;
+            %{ grav_syslog_open(ident); %};
+            self.opened = true;
+        }
+
+        fn enabled(l: Level) -> bool { return l != Level.Off && int(l) >= int(self.minLevel); }
+        fn handle(record: LogRecord) {
+            if (!self.enabled(record.level)) { return; }
+            let line = self.formatter.format(record);
+            let priority = SyslogHandler.priorityOf(record.level);
+            %{ grav_syslog_write(priority, line); %};
+        }
+        private static fn priorityOf(l: Level) -> int {
+            return match (l) {
+                case Level.Debug: %{ LOG_DEBUG %} as int
+                case Level.Info: %{ LOG_INFO %} as int
+                case Level.Notice: %{ LOG_NOTICE %} as int
+                case Level.Warning: %{ LOG_WARNING %} as int
+                case Level.Error: %{ LOG_ERR %} as int
+                case Level.Critical: %{ LOG_CRIT %} as int
+                case Level.Alert: %{ LOG_ALERT %} as int
+                case Level.Emergency: %{ LOG_EMERG %} as int
+                case Level.Off: 0
+            };
+        }
+    }
+}
