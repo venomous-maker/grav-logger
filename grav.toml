@@ -1,0 +1,5 @@
+name = "grav-logger"
+lib = "src/all.grav"
+paths = ["src"]
+
+[dependencies]

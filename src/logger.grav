@@ -1,0 +1,189 @@
+// logger.grav — levels, one log record, and how it becomes a line of text
+// (a Formatter) and where that line goes (a Handler): the pieces a Channel
+// (channel.grav) is built from.
+import "std"
+
+namespace logger {
+
+    // How severe a message is (PSR-3's eight, ascending, plus Off). A handler
+    // writes a record at its own level and above; Off never writes anything.
+    enum Level { Debug, Info, Notice, Warning, Error, Critical, Alert, Emergency, Off }
+
+    // The level a name stands for ("debug", "warn"/"warning", "emergency", ...;
+    // any case), or `fallback`.
+    fn parseLevel(name: string, fallback: Level) -> Level {
+        switch (Str.lower(Str.trim(name))) {
+            case "debug": return Level.Debug
+            case "info": return Level.Info
+            case "notice": return Level.Notice
+            case "warn", "warning": return Level.Warning
+            case "error": return Level.Error
+            case "critical": return Level.Critical
+            case "alert": return Level.Alert
+            case "emergency": return Level.Emergency
+            case "off", "none": return Level.Off
+            default: return fallback
+        }
+    }
+    fn levelName(l: Level) -> string {
+        return match (l) {
+            case Level.Debug: "debug"
+            case Level.Info: "info"
+            case Level.Notice: "notice"
+            case Level.Warning: "warning"
+            case Level.Error: "error"
+            case Level.Critical: "critical"
+            case Level.Alert: "alert"
+            case Level.Emergency: "emergency"
+            case Level.Off: "off"
+        }
+    }
+
+    // One message on its way out: everything a Formatter or Handler might want.
+    class LogRecord {
+        public level: Level
+        public message: string
+        // The channel it was logged on ("" for an unnamed one).
+        public channel: string
+        // "" when there is none (most messages): checked before building one,
+        // so a disabled level's call costs nothing beyond that check.
+        public context: HashMap<string, any>
+        public time: DateTime
+        constructor(level: Level, message: string, channel: string, context: HashMap<string, any>) {
+            self.level = level; self.message = message; self.channel = channel; self.context = context;
+            self.time = DateTime.now();
+        }
+    }
+
+    // Turns a LogRecord into the line (or lines) a Handler writes.
+    interface Formatter {
+        fn format(record: LogRecord) -> string
+    }
+
+    // "2026-11-13 09:30:00 INFO  [channel] message key=value key2=\"two words\""
+    // (no trailing newline: the handler adds it).
+    class LineFormatter implements Formatter {
+        // Fields print as `str(v)`, quoted when that text has a space, a quote,
+        // or is empty.
+        fn format(record: LogRecord) -> string {
+            let sb = new StringBuilder();
+            sb.append(record.time.toString()).append(" ").append(LineFormatter.levelWord(record.level));
+            if (record.channel != "") { sb.append(" [").append(record.channel).append("]"); }
+            sb.append(" ").append(record.message);
+            if (record.context != null) {
+                for (k in record.context.keys()) { sb.append(" ").append(k).append("=").append(LineFormatter.fieldText(record.context[k])); }
+            }
+            return sb.toString();
+        }
+        private static fn levelWord(l: Level) -> string {
+            return match (l) {
+                case Level.Debug: "DEBUG    "
+                case Level.Info: "INFO     "
+                case Level.Notice: "NOTICE   "
+                case Level.Warning: "WARNING  "
+                case Level.Error: "ERROR    "
+                case Level.Critical: "CRITICAL "
+                case Level.Alert: "ALERT    "
+                case Level.Emergency: "EMERGENCY"
+                case Level.Off: ""
+            };
+        }
+        private static fn fieldText(v: any) -> string {
+            let s = str(v);
+            if (s == "" || Str.contains(s, " ") || Str.contains(s, "\"")) { return __repr(s); }
+            return s;
+        }
+    }
+
+    // One JSON object per line (no trailing newline): for shipping logs to an
+    // aggregator that parses structured fields instead of a human reading them.
+    class JsonFormatter implements Formatter {
+        fn format(record: LogRecord) -> string {
+            let o = Json.object();
+            o.set("time", record.time.format("%Y-%m-%dT%H:%M:%S"));
+            o.set("level", logger.levelName(record.level));
+            if (record.channel != "") { o.set("channel", record.channel); }
+            o.set("message", record.message);
+            if (record.context != null && record.context.size() > 0) {
+                let c = Json.object();
+                for (k in record.context.keys()) { c.set(k, JsonFormatter.toJson(record.context[k])); }
+                o.set("context", c);
+            }
+            return o.toJson();
+        }
+        private static fn toJson(v: any) -> JsonValue {
+            if (v == null) { return Json.nil(); }
+            if (v is bool) { return Json.of(v as bool); }
+            if (v is long) { return Json.of(v as long); }
+            if (v is int) { return Json.of((v as int) as long); }
+            if (v is float) { return Json.of(v as float); }
+            if (v is double) { return Json.of(v as double); }
+            if (v is string) { return Json.of(v as string); }
+            if (v is JsonValue) { return v as JsonValue; }
+            return Json.of(str(v));            // anything else (an exception, an object): its text
+        }
+    }
+
+    // Where a formatted line goes, and what it takes to get written at all.
+    interface Handler {
+        fn handle(record: LogRecord)
+        // Whether `handle` would write anything at `l` (Off: never).
+        fn enabled(l: Level) -> bool
+    }
+
+    // Writes to a file (appending), or to standard error (StreamHandler.stderr()).
+    // One write under a lock per record (thread-safe; never interleaves two
+    // lines, never half-written from two threads at once).
+    class StreamHandler implements Handler {
+        private file: FileWriter
+        private lock: Mutex
+        public minLevel: Level
+        public formatter: Formatter
+
+        constructor(path: string) {
+            self.file = new FileWriter(path, true);
+            self.lock = new Mutex();
+            self.minLevel = Level.Debug;
+            self.formatter = new LineFormatter();
+        }
+        // Standard error (no path): each handle() call writes and flushes at once.
+        constructor() {
+            self.file = null;
+            self.lock = new Mutex();
+            self.minLevel = Level.Debug;
+            self.formatter = new LineFormatter();
+        }
+        // Same as `new StreamHandler()`, read more clearly at the call site.
+        static fn stderr() -> StreamHandler { return new StreamHandler(); }
+
+        fn enabled(l: Level) -> bool { return l != Level.Off && int(l) >= int(self.minLevel); }
+        fn handle(record: LogRecord) {
+            if (!self.enabled(record.level)) { return; }
+            let line = self.formatter.format(record);
+            self.lock.lock();
+            if (self.file != null) { self.file.writeLine(line); self.file.flush(); }
+            else { IO.eprint(line); }
+            self.lock.unlock();
+        }
+        fn close() { if (self.file != null) { self.file.close(); } }
+    }
+
+    // Writes nothing (a channel's handler list entry that silences a level, or
+    // a placeholder while a real handler is not configured yet).
+    class NullHandler implements Handler {
+        fn enabled(l: Level) -> bool { return false; }
+        fn handle(record: LogRecord) {}
+    }
+
+    // Fans one record out to every handler in `handlers` (Laravel's "stack"
+    // channel): each sees it at its own level, independently.
+    class StackHandler implements Handler {
+        public handlers: Array<Handler>
+        constructor(handlers: Array<Handler>) { self.handlers = handlers; }
+        fn enabled(l: Level) -> bool {
+            for (h in self.handlers) { if (h.enabled(l)) { return true; } }
+            return false;
+        }
+        fn handle(record: LogRecord) { for (h in self.handlers) { h.handle(record); } }
+    }
+}
