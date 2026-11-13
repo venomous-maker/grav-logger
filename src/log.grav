@@ -1,0 +1,63 @@
+// log.grav — Log: named channels, so code reaches for one by name instead of
+// passing a Channel around, and the common one-line setup for a single
+// destination.
+//
+//   Logging.toStderr()                               // the default channel, writing to stderr
+//   Logging.info("server started")
+//   Logging.channel("db").toFile("/var/log/db.log").warning("slow query", fields("ms", 420))
+//   Logging.register("audit", new LogChannel("audit").addHandler(someHandler))
+import "std"
+import "logger.grav"
+import "channel.grav"
+import "rotating.grav"
+
+namespace logger {
+
+    class Logging {
+        private static channels: HashMap<string, LogChannel> = new HashMap<string, LogChannel>()
+        private static defaultName: string = "default"
+
+        // The channel called `name`, made (at the default level) the first time
+        // it is asked for.
+        static fn channel(name: string = "") -> LogChannel {
+            let key = name == "" ? Logging.defaultName : name;
+            if (!Logging.channels.containsKey(key)) {
+                let ch = new LogChannel(key);
+                ch.level = Logging.defaultLevel();
+                Logging.channels.put(key, ch);
+            }
+            return Logging.channels[key];
+        }
+        // Replaces (or adds) the channel called `name`.
+        static fn register(name: string, ch: LogChannel) { Logging.channels.put(name, ch); }
+        // Makes `name` the channel Logging.info and friends use.
+        static fn useChannel(name: string) { Logging.defaultName = name; }
+        // A channel that fans a message out to every one of `names`' own
+        // handlers (Laravel's "stack" channel): each still filters by its own level.
+        static fn stack(names: Array<string>) -> LogChannel {
+            let combined = new LogChannel("stack");
+            for (n in names) { for (h in Logging.channel(n).handlers) { combined.handlers.push(h); } }
+            return combined;
+        }
+        // The level a new channel starts at: GRAV_LOG (debug, info, notice,
+        // warning, error, critical, alert, emergency, off) or Info.
+        static fn defaultLevel() -> Level { return parseLevel(env("GRAV_LOG"), Level.Info); }
+
+        // ── the default channel, set up in one call ──────────────────────────────
+        static fn toStderr() -> LogChannel { return Logging.channel().addHandler(StreamHandler.stderr()); }
+        static fn toFile(path: string) -> LogChannel { return Logging.channel().addHandler(new StreamHandler(path)); }
+        static fn daily(path: string, days: int = 14) -> LogChannel { return Logging.channel().addHandler(new RotatingFileHandler(path, days)); }
+        static fn setLevel(l: Level) { Logging.channel().level = l; }
+
+        // ── the default channel, forwarded ───────────────────────────────────────
+        static fn debug(message: string, context: HashMap<string, any> = null) { Logging.channel().debug(message, context); }
+        static fn info(message: string, context: HashMap<string, any> = null) { Logging.channel().info(message, context); }
+        static fn notice(message: string, context: HashMap<string, any> = null) { Logging.channel().notice(message, context); }
+        static fn warning(message: string, context: HashMap<string, any> = null) { Logging.channel().warning(message, context); }
+        static fn error(message: string, context: HashMap<string, any> = null) { Logging.channel().error(message, context); }
+        static fn error(message: string, e: Exception) { Logging.channel().error(message, e); }
+        static fn critical(message: string, context: HashMap<string, any> = null) { Logging.channel().critical(message, context); }
+        static fn alert(message: string, context: HashMap<string, any> = null) { Logging.channel().alert(message, context); }
+        static fn emergency(message: string, context: HashMap<string, any> = null) { Logging.channel().emergency(message, context); }
+    }
+}
