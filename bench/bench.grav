@@ -1,0 +1,25 @@
+// bench.grav — the same work as bench.py (Python's logging module) and
+// bench.php (a plain fopen/fwrite/fflush-per-line logger, PHP's usual way to
+// do this without a framework): see bench/README.md.
+import "std"
+import "../src/all.grav"
+use logger.*
+
+fn main() {
+    let n = Integer.parseOr(argc() > 1 ? argv(1) : "20000", 20000) as int;
+    let path = argc() > 2 ? argv(2) : "/tmp/grav_logger_bench.log";
+    new File(path).delete();
+
+    let ch = new LogChannel("bench").addHandler(new StreamHandler(path));
+    let ctx = new HashMap<string, any>();
+    ctx.put("i", 0);
+
+    let t0 = Time.nowMs();
+    for (i in 0..n) {
+        ctx.put("i", i);
+        ch.info("request handled in ${i}ms", ctx);
+    }
+    let ms = Time.nowMs() - t0;
+    print("grav-logger: ${n} lines in ${ms}ms");
+    new File(path).delete();
+}
