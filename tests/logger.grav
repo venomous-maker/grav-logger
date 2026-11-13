@@ -1,0 +1,150 @@
+// grav-logger's tests: levels, formatters, each handler, channels (level
+// filtering, with() context), and the Log facade.
+import "std"
+import "../src/all.grav"
+use logger.*
+
+fn readFile(path: string) -> string { return new File(path).readOr(""); }
+
+test "LineFormatter" {
+    let ctx = new HashMap<string, any>();
+    ctx.put("user", "ada");
+    ctx.put("note", "two words");
+    let r = new LogRecord(Level.Warning, "slow query", "db", ctx);
+    let line = new LineFormatter().format(r);
+    assertEq(Str.contains(line, "WARNING"), true);
+    assertEq(Str.contains(line, "[db]"), true);
+    assertEq(Str.contains(line, "slow query"), true);
+    assertEq(Str.contains(line, "user=ada"), true);
+    assertEq(Str.contains(line, "note=\"two words\""), true);
+
+    let plain = new LogRecord(Level.Info, "started", "", null);
+    let line2 = new LineFormatter().format(plain);
+    assertEq(Str.contains(line2, "[") == false, true);   // no channel bracket for ""
+}
+
+test "JsonFormatter" {
+    let ctx = new HashMap<string, any>();
+    ctx.put("ms", 42);
+    let r = new LogRecord(Level.Error, "failed", "api", ctx);
+    let line = new JsonFormatter().format(r);
+    let j = Json.parse(line);
+    assertEq("${j.getString("level", "")} ${j.getString("channel", "")} ${j.getString("message", "")} ${j.get("context").getInt("ms", 0)}",
+             "error api failed 42");
+}
+
+test "levels: parseLevel, and enabled()" {
+    assertEq("${parseLevel("Warning", Level.Debug)} ${parseLevel("warn", Level.Debug)} ${parseLevel("nope", Level.Critical)}",
+             "Warning Warning Critical");
+    let ch = new LogChannel("x");
+    ch.level = Level.Warning;
+    assertEq("${ch.enabled(Level.Debug)} ${ch.enabled(Level.Warning)} ${ch.enabled(Level.Critical)} ${ch.enabled(Level.Off)}",
+             "false true true false");
+}
+
+test "StreamHandler: a file, append, and level filtering" {
+    let path = "${Dir.temp()}/grav-logger-test-${Process.pid()}.log";
+    new File(path).delete();
+    let h = new StreamHandler(path);
+    h.minLevel = Level.Warning;
+    h.handle(new LogRecord(Level.Info, "skipped", "", null));
+    h.handle(new LogRecord(Level.Error, "kept", "", null));
+    h.close();
+    let text = readFile(path);
+    assertEq("${Str.contains(text, "skipped")} ${Str.contains(text, "kept")}", "false true");
+
+    // A second handler appending to the same path adds to it, not over it.
+    let h2 = new StreamHandler(path);
+    h2.handle(new LogRecord(Level.Error, "second", "", null));
+    h2.close();
+    let text2 = readFile(path);
+    assertEq("${Str.contains(text2, "kept")} ${Str.contains(text2, "second")}", "true true");
+    new File(path).delete();
+}
+
+test "a Channel: handlers, level, with() context" {
+    let path = "${Dir.temp()}/grav-logger-channel-${Process.pid()}.log";
+    new File(path).delete();
+    let ch = new LogChannel("app").addHandler(new StreamHandler(path));
+    ch.level = Level.Info;
+    ch.debug("not written");
+    ch.info("written");
+    let withUser = ch.with("user", "ada");
+    withUser.info("tagged");
+    let text = readFile(path);
+    assertEq(Str.contains(text, "not written"), false);
+    assertEq(Str.contains(text, "[app] written"), true);
+    assertEq(Str.contains(text, "[app] tagged user=ada"), true);
+    // with() does not affect the channel it was copied from.
+    ch.info("plain again");
+    assertEq(Str.contains(readFile(path), "plain again user=ada"), false);
+    new File(path).delete();
+}
+
+test "error(message, exception)" {
+    let path = "${Dir.temp()}/grav-logger-exc-${Process.pid()}.log";
+    new File(path).delete();
+    let ch = new LogChannel("app").addHandler(new StreamHandler(path));
+    try { throw new ValueError("boom") } catch (e: ValueError) { ch.error("request failed", e) }
+    let text = readFile(path);
+    assertEq(Str.contains(text, "request failed: ValueError"), true);
+    assertEq(Str.contains(text, "boom"), true);
+    new File(path).delete();
+}
+
+test "StackHandler and NullHandler" {
+    let path = "${Dir.temp()}/grav-logger-stack-${Process.pid()}.log";
+    new File(path).delete();
+    let a = new StreamHandler(path);
+    let b = new NullHandler();
+    let hs = new Array<Handler>();
+    hs.push(a); hs.push(b);
+    let stack = new StackHandler(hs);
+    assertEq("${stack.enabled(Level.Info)} ${b.enabled(Level.Emergency)}", "true false");
+    stack.handle(new LogRecord(Level.Info, "fanned out", "", null));
+    assertEq(Str.contains(readFile(path), "fanned out"), true);
+    new File(path).delete();
+}
+
+test "RotatingFileHandler: a dated file, and pruning old ones" {
+    let dir = "${Dir.temp()}/grav-logger-daily-${Process.pid()}";
+    Dir.create(dir);
+    // A stale file (well past the retention), from before this handler ever
+    // wrote: pruning runs whenever the day's file changes, including the
+    // very first write (its "currentDate" starts unset).
+    let old = DateTime.now().addDays(-10).date();
+    new File(dir + "/app-" + old + ".log").write("stale\n");
+
+    let h = new RotatingFileHandler(dir + "/app.log", 2);
+    h.handle(new LogRecord(Level.Info, "today", "", null));
+    let today = DateTime.now().date();
+    assertEq(readFile(dir + "/app-" + today + ".log") != "", true);
+    assertEq(new File(dir + "/app-" + old + ".log").exists(), false);
+
+    // A fresh file within the retention survives a later write's pruning.
+    h.handle(new LogRecord(Level.Info, "again", "", null));
+    assertEq(readFile(dir + "/app-" + today + ".log") != "", true);
+    Dir.removeAll(dir);
+}
+
+test "SyslogHandler does not throw" {
+    let h = new SyslogHandler("grav-logger-test");
+    h.handle(new LogRecord(Level.Info, "hello from the test suite", "", null));
+}
+
+test "the Log facade: named channels, stack, and one-line setup" {
+    let path = "${Dir.temp()}/grav-logger-facade-${Process.pid()}.log";
+    new File(path).delete();
+    Logging.register("facade_test", new LogChannel("facade_test").addHandler(new StreamHandler(path)));
+    Logging.channel("facade_test").info("via the facade");
+    assertEq(Str.contains(readFile(path), "via the facade"), true);
+
+    let other = "${Dir.temp()}/grav-logger-facade2-${Process.pid()}.log";
+    new File(other).delete();
+    Logging.register("second", new LogChannel("second").addHandler(new StreamHandler(other)));
+    let combined = Logging.stack(["facade_test", "second"]);
+    combined.info("to both");
+    assertEq("${Str.contains(readFile(path), "to both")} ${Str.contains(readFile(other), "to both")}", "true true");
+    new File(path).delete();
+    new File(other).delete();
+}
