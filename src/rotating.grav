@@ -1,0 +1,86 @@
+// rotating.grav — a file handler that starts a new file each day, and drops
+// ones older than its retention (Laravel's "daily" channel).
+//
+//   let h = new RotatingFileHandler("/var/log/app.log", 14)   // app-2026-11-13.log, ...
+import "std"
+import "logger.grav"
+
+namespace logger {
+
+    class RotatingFileHandler implements Handler {
+        // The path given to the constructor ("/var/log/app"): each day's file
+        // is this with "-YYYY-MM-DD" before its extension.
+        public basePath: string
+        // How many days' files to keep (0: forever).
+        public days: int
+        public minLevel: Level
+        public formatter: Formatter
+        private current: StreamHandler
+        private currentDate: string
+        private lock: Mutex
+
+        constructor(basePath: string, days: int = 14) {
+            self.basePath = basePath;
+            self.days = days;
+            self.minLevel = Level.Debug;
+            self.formatter = new LineFormatter();
+            self.current = null;
+            self.currentDate = "";
+            self.lock = new Mutex();
+        }
+
+        fn enabled(l: Level) -> bool { return l != Level.Off && int(l) >= int(self.minLevel); }
+        fn handle(record: LogRecord) {
+            if (!self.enabled(record.level)) { return; }
+            let date = record.time.date();
+            self.lock.lock();
+            if (date != self.currentDate) {
+                if (self.current != null) { self.current.close(); }
+                self.current = new StreamHandler(self.pathFor(date));
+                self.current.minLevel = Level.Debug;           // this handler already filtered by level
+                self.currentDate = date;
+                if (self.days > 0) { self.prune(record.time); }
+            }
+            self.current.formatter = self.formatter;
+            self.current.handle(record);
+            self.lock.unlock();
+        }
+        private fn pathFor(date: string) -> string {
+            let dot = Str.lastIndexOf(self.basePath, ".");
+            let slash = Str.lastIndexOf(self.basePath, "/");
+            if (dot > slash) { return self.basePath[..dot] + "-" + date + self.basePath[dot..]; }
+            return self.basePath + "-" + date;
+        }
+        // basePath split into its directory, its bare name (no directory, no
+        // extension: "app"), and its extension (".log", or "" for none) — the
+        // same split pathFor uses to build "dir/app-DATE.log".
+        private fn split() -> Array<string> {
+            let slash = Str.lastIndexOf(self.basePath, "/");
+            let dirPath = slash >= 0 ? self.basePath[..slash] : ".";
+            let dot = Str.lastIndexOf(self.basePath, ".");
+            let ext = dot > slash ? self.basePath[dot..] : "";
+            let nameEnd = dot > slash ? dot : self.basePath.length;
+            let base = slash >= 0 ? self.basePath[slash + 1..nameEnd] : self.basePath[..nameEnd];
+            let out = new Array<string>();
+            out.push(dirPath); out.push(base); out.push(ext);
+            return out;
+        }
+        // Deletes files older than `self.days` days (by name: "base-YYYY-MM-DD...ext").
+        private fn prune(now: DateTime) {
+            let parts = self.split();
+            let dirPath = parts[0];
+            let base = parts[1];
+            let ext = parts[2];
+            if (!Dir.exists(dirPath)) { return; }
+            let cutoff = now.addDays(0 - self.days);
+            let prefix = base + "-";
+            for (name in Dir.list(dirPath)) {
+                if (!Str.startsWith(name, prefix) || (ext != "" && !Str.endsWith(name, ext))) { continue; }
+                let datePart = ext != "" ? name[prefix.length..name.length - ext.length] : name[prefix.length..];
+                if (datePart.length < 10) { continue; }
+                let day = DateTime.tryParse(datePart[..10]);
+                if (day != null && day < cutoff) { new File(dirPath + "/" + name).delete(); }
+            }
+        }
+    }
+}
