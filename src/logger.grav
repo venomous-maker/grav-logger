@@ -5,6 +5,35 @@ import "std"
 
 namespace logger {
 
+    %{
+    #include <string.h>
+    #include <time.h>
+    /* "YYYY-MM-DD HH:MM:SS" (or with a 'T' between, `iso`) for unix second `t`,
+       local time, as a counted string. localtime_r and strftime run once per
+       second per thread, not once per line. */
+    static const char* grav_log_stamp(long long t, int iso) {
+        static _Thread_local long long last = -1;
+        static _Thread_local char text[32];
+        if (t != last) {
+            time_t tt = (time_t)t; struct tm tmv;
+            if (!localtime_r(&tt, &tmv) || !strftime(text, sizeof text, "%Y-%m-%d %H:%M:%S", &tmv)) text[0] = 0;
+            last = t;
+        }
+        size_t n = strlen(text);
+        char* r = grav_str_alloc(n + 1);
+        memcpy(r, text, n + 1);
+        if (iso && n > 10) r[10] = 'T';
+        return r;
+    }
+    %}
+
+    // The record's time as text: `iso` puts a 'T' between date and time.
+    fn stampOf(time: DateTime, iso: bool) -> string {
+        let t = time.unix();
+        let i = iso ? 1 : 0;
+        return %{ grav_log_stamp(t, i) %} as string;
+    }
+
     // How severe a message is (PSR-3's eight, ascending, plus Off). A handler
     // writes a record at its own level and above; Off never writes anything.
     enum Level { Debug, Info, Notice, Warning, Error, Critical, Alert, Emergency, Off }
@@ -67,11 +96,13 @@ namespace logger {
         // or is empty.
         fn format(record: LogRecord) -> string {
             let sb = new StringBuilder();
-            sb.append(record.time.toString()).append(" ").append(LineFormatter.levelWord(record.level));
-            if (record.channel != "") { sb.append(" [").append(record.channel).append("]"); }
-            sb.append(" ").append(record.message);
+            // (a DateTime with microseconds prints them, as its toString does)
+            sb.append(record.time.micros() == 0 ? logger.stampOf(record.time, false) : record.time.toString());
+            sb.appendChar(32).append(LineFormatter.levelWord(record.level));
+            if (record.channel != "") { sb.append(" [").append(record.channel).appendChar(93); }
+            sb.appendChar(32).append(record.message);
             if (record.context != null) {
-                for (k in record.context.keys()) { sb.append(" ").append(k).append("=").append(LineFormatter.fieldText(record.context[k])); }
+                record.context.forEach(fn(k: string, v: any) { sb.appendChar(32).append(k).appendChar(61).append(LineFormatter.fieldText(v)); });
             }
             return sb.toString();
         }
@@ -100,13 +131,13 @@ namespace logger {
     class JsonFormatter implements Formatter {
         fn format(record: LogRecord) -> string {
             let o = Json.object();
-            o.set("time", record.time.format("%Y-%m-%dT%H:%M:%S"));
+            o.set("time", logger.stampOf(record.time, true));
             o.set("level", logger.levelName(record.level));
             if (record.channel != "") { o.set("channel", record.channel); }
             o.set("message", record.message);
             if (record.context != null && record.context.size() > 0) {
                 let c = Json.object();
-                for (k in record.context.keys()) { c.set(k, JsonFormatter.toJson(record.context[k])); }
+                record.context.forEach(fn(k: string, v: any) { c.set(k, JsonFormatter.toJson(v)); });
                 o.set("context", c);
             }
             return o.toJson();
