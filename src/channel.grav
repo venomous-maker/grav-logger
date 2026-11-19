@@ -31,7 +31,7 @@ namespace logger {
             child.handlers = self.handlers;
             child.level = self.level;
             child.baseContext = new HashMap<string, any>();
-            if (self.baseContext != null) { for (k in self.baseContext.keys()) { child.baseContext.put(k, self.baseContext[k]); } }
+            if (self.baseContext != null) { for ((k, v) in self.baseContext) { child.baseContext.put(k, v); } }
             child.baseContext.put(key, value);
             return child;
         }
@@ -46,8 +46,8 @@ namespace logger {
         private fn mergeContext(context: HashMap<string, any>) -> HashMap<string, any> {
             if (self.baseContext == null) { return context; }
             let out = new HashMap<string, any>();
-            for (k in self.baseContext.keys()) { out.put(k, self.baseContext[k]); }
-            if (context != null) { for (k in context.keys()) { out.put(k, context[k]); } }
+            for ((k, v) in self.baseContext) { out.put(k, v); }
+            if (context != null) { for ((k, v) in context) { out.put(k, v); } }
             return out;
         }
 
