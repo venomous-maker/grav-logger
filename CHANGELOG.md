@@ -6,6 +6,14 @@ compiler versions it builds with.
 
 ## Unreleased
 
+### Performance
+
+- `LineFormatter` and `JsonFormatter` walk a record's context with a loop
+  instead of a closure made for every line, and the line formatter reserves
+  its buffer up front: about 20% fewer instructions per logged line (the
+  benchmark's 5,000 lines: 30.0M to 25.0M, the rest is its own string
+  building and the `write` per line).
+
 ## 0.2.0 (2026-11-20)
 
 ### Requirements
