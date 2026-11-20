@@ -96,13 +96,14 @@ namespace logger {
         // or is empty.
         fn format(record: LogRecord) -> string {
             let sb = new StringBuilder();
+            sb.reserve(64 + record.message.length);
             // (a DateTime with microseconds prints them, as its toString does)
             sb.append(record.time.micros() == 0 ? logger.stampOf(record.time, false) : record.time.toString());
             sb.appendChar(32).append(LineFormatter.levelWord(record.level));
             if (record.channel != "") { sb.append(" [").append(record.channel).appendChar(93); }
             sb.appendChar(32).append(record.message);
             if (record.context != null) {
-                record.context.forEach(fn(k: string, v: any) { sb.appendChar(32).append(k).appendChar(61).append(LineFormatter.fieldText(v)); });
+                for ((k, v) in record.context) { sb.appendChar(32).append(k).appendChar(61).append(LineFormatter.fieldText(v)); }
             }
             return sb.toString();
         }
@@ -120,6 +121,7 @@ namespace logger {
             };
         }
         private static fn fieldText(v: any) -> string {
+            if (v is int || v is long) { return str(v); } // (never quoted)
             let s = str(v);
             if (s == "" || Str.contains(s, " ") || Str.contains(s, "\"")) { return __repr(s); }
             return s;
@@ -137,7 +139,7 @@ namespace logger {
             o.set("message", record.message);
             if (record.context != null && record.context.size() > 0) {
                 let c = Json.object();
-                record.context.forEach(fn(k: string, v: any) { c.set(k, JsonFormatter.toJson(v)); });
+                for ((k, v) in record.context) { c.set(k, JsonFormatter.toJson(v)); }
                 o.set("context", c);
             }
             return o.toJson();
