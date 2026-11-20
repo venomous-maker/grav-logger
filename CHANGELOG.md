@@ -6,6 +6,8 @@ compiler versions it builds with.
 
 ## Unreleased
 
+## 0.2.1 (2026-11-20)
+
 ### Performance
 
 - `LineFormatter` and `JsonFormatter` walk a record's context with a loop
