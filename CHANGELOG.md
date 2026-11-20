@@ -6,6 +6,11 @@ compiler versions it builds with.
 
 ## Unreleased
 
+### Requirements
+
+- Needs grav 1.9.0 or later, and uses the 0.2.0 releases of the packages it
+  depends on.
+
 ## 0.1.0 (2026-11-19)
 
 The first tagged release. Needs grav 1.7.0 or newer.
